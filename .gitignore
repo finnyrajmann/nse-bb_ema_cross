@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Credentials
+.env
+*.env
+
+# DO deployment
+functions/project.yml
+functions/.deployed
+functions/packages/**/__deployer__.zip
+
+# OS
+.DS_Store
+Thumbs.db
