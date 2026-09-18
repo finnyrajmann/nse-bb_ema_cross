@@ -470,6 +470,7 @@ def run_watchlist_scan(watchlist, positions, pending):
                 'BB Lower':  ind['bb_lower'],
                 'EMA9':      ind['ema9'],
                 'EMA30':     ind['ema30'],
+                'EMA200':    ind['ema200'],
             })
             print(f"  New pending: {symbol} touched BB-lower @ Rs.{ind['price']}")
 
@@ -762,7 +763,7 @@ def main(args):
                 pending_display.append({
                     'Symbol': sym, 'Industry': row.get('Industry', ''),
                     'Price': np['Price'], 'EMA9': np['EMA9'],
-                    'EMA30': np['EMA30'], 'EMA200': 'N/A',
+                    'EMA30': np['EMA30'], 'EMA200': np['EMA200'],
                 })
             else:
                 pending_display.append({
