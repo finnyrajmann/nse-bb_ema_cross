@@ -52,7 +52,7 @@ import time
 import base64
 import math
 from io import StringIO
-from datetime import datetime, date
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
@@ -164,8 +164,6 @@ def get_indicators(symbol, period=DATA_PERIOD):
 
     closes = [b['close'] for b in bars]
     price  = round(closes[-1], 2)
-    prev   = round(closes[-2], 2) if len(closes) > 1 else price
-    change = round((price - prev) / prev * 100, 2) if prev else 0.0
 
     bb = calc_bb(closes)
     if bb is None:
@@ -177,7 +175,6 @@ def get_indicators(symbol, period=DATA_PERIOD):
 
     return {
         'price':    price,
-        'change':   change,
         'bb_upper': bb['bb_upper'],
         'bb_mid':   bb['bb_mid'],
         'bb_lower': bb['bb_lower'],
@@ -185,7 +182,6 @@ def get_indicators(symbol, period=DATA_PERIOD):
         'ema30':    ema30,
         'ema200':   ema200,
         'bars':     bars,
-        'closes':   closes,
     }
 
 
@@ -376,7 +372,7 @@ def run_pending_review(pending, positions, entry_snapshots):
             time.sleep(SLEEP)
             continue
 
-        if ind['ema200'] is None or ind['price'] < ind['ema200']:
+        if ind['ema200'] is None or ind['price'] <= ind['ema200']:
             dropped.append({
                 'Symbol': symbol,
                 'Price':  ind['price'],
