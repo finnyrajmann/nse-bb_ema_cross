@@ -156,6 +156,20 @@ def calc_bb(closes, period=BB_PERIOD, std_mult=BB_STD):
     }
 
 
+REF_DATE = None   # latest trading date seen on the NIFTY index this run
+
+
+def fetch_ref_date():
+    """Latest bar date on ^NSEI = the session every stock should be on."""
+    bars = fetch_price_bars('^NSEI', '5d')
+    return bars[-1]['date'] if bars else None
+
+
+def is_stale(ind):
+    """True if this symbol's newest bar is older than the index's newest bar."""
+    return bool(REF_DATE and ind.get('last_date') and ind['last_date'] < REF_DATE)
+
+
 def get_indicators(symbol, period=DATA_PERIOD):
     """Get price + BB + 9/30/200 EMA indicators + raw bars for a symbol."""
     bars = fetch_price_bars(symbol, period)
@@ -173,6 +187,10 @@ def get_indicators(symbol, period=DATA_PERIOD):
     ema30  = calc_ema(closes, EMA_SLOW)
     ema200 = calc_ema(closes, EMA_LONG)
 
+    # Previous bar's 9/30 EMA (needed to detect a true upward cross)
+    ema9_prev  = calc_ema(closes[:-1], EMA_FAST)
+    ema30_prev = calc_ema(closes[:-1], EMA_SLOW)
+
     return {
         'price':    price,
         'bb_upper': bb['bb_upper'],
@@ -181,6 +199,9 @@ def get_indicators(symbol, period=DATA_PERIOD):
         'ema9':     ema9,
         'ema30':    ema30,
         'ema200':   ema200,
+        'last_date':  bars[-1]['date'],
+        'ema9_prev':  ema9_prev,
+        'ema30_prev': ema30_prev,
         'bars':     bars,
     }
 
@@ -353,10 +374,14 @@ def run_pending_review(pending, positions, entry_snapshots):
     """
     Re-check every symbol already in the pending list:
       - price < EMA200            -> dropped (no entry)
-      - 9EMA crosses above 30EMA  -> PROMOTED (real position opens)
+      - 9EMA crosses above 30EMA (prev bar 9<=30, now 9>30)
+                                  -> PROMOTED (real position opens)
       - otherwise                 -> stays pending
-    Returns (still_pending, dropped, promoted, positions, entry_snapshots)
+    Returns (still_pending, dropped, promoted, positions, entry_snapshots,
+             view) where view maps Symbol -> display values for every stock
+    that remains pending.
     """
+    view            = {}
     still_pending   = []
     dropped         = []
     promoted        = []
@@ -369,10 +394,25 @@ def run_pending_review(pending, positions, entry_snapshots):
 
         if ind is None:
             still_pending.append(row)   # can't evaluate — leave as-is
+            view[symbol] = {'Price': 'N/A', 'EMA9': 'N/A', 'EMA30': 'N/A',
+                            'EMA200': 'N/A', 'Status': 'no data'}
+            time.sleep(SLEEP)
+            continue
+
+        view[symbol] = {'Price': ind['price'], 'EMA9': ind['ema9'],
+                        'EMA30': ind['ema30'], 'EMA200': ind['ema200'],
+                        'Status': ''}
+
+        if is_stale(ind):
+            # Data is older than the latest session — do not promote or drop.
+            still_pending.append(row)
+            view[symbol]['Status'] = f"STALE (as of {ind['last_date']})"
+            print(f"  STALE data for {symbol}: last bar {ind['last_date']} < {REF_DATE}")
             time.sleep(SLEEP)
             continue
 
         if ind['ema200'] is None or ind['price'] <= ind['ema200']:
+            view.pop(symbol, None)
             dropped.append({
                 'Symbol': symbol,
                 'Price':  ind['price'],
@@ -381,8 +421,17 @@ def run_pending_review(pending, positions, entry_snapshots):
             time.sleep(SLEEP)
             continue
 
-        if (ind['ema9'] is not None and ind['ema30'] is not None
-                and ind['ema9'] > ind['ema30']):
+        # True cross-up: 9EMA was at/below 30EMA on the previous bar and is
+        # above it now. A stock whose 9EMA is already above 30EMA stays
+        # pending until it dips below and crosses back up.
+        crossed_up = (
+            ind['ema9'] is not None and ind['ema30'] is not None
+            and ind['ema9_prev'] is not None and ind['ema30_prev'] is not None
+            and ind['ema9_prev'] <= ind['ema30_prev']
+            and ind['ema9'] > ind['ema30']
+        )
+
+        if crossed_up:
             quantity   = max(1, int(POSITION_SIZE / ind['price']))
             entry_date = datetime.now().strftime('%Y-%m-%d')
 
@@ -411,13 +460,21 @@ def run_pending_review(pending, positions, entry_snapshots):
                 'BB Upper': ind['bb_upper'],
             })
             print(f"  Promoted: {symbol} @ Rs.{ind['price']} "
-                  f"(9EMA {ind['ema9']} > 30EMA {ind['ema30']})")
+                  f"(9EMA crossed above 30EMA: {ind['ema9_prev']}<={ind['ema30_prev']} -> {ind['ema9']}>{ind['ema30']})")
         else:
             still_pending.append(row)
+            if ind['ema9'] is not None and ind['ema30'] is not None:
+                view[symbol]['Status'] = ('9>30, needs dip then cross'
+                                          if ind['ema9'] > ind['ema30']
+                                          else '9<30, awaiting cross')
 
         time.sleep(SLEEP)
 
-    return still_pending, dropped, promoted, positions, entry_snapshots
+    # promoted stocks leave pending, so they have no pending view
+    for pr in promoted:
+        view.pop(pr['Symbol'], None)
+
+    return still_pending, dropped, promoted, positions, entry_snapshots, view
 
 
 # ─────────────────────────────────────────────
@@ -441,6 +498,11 @@ def run_watchlist_scan(watchlist, positions, pending):
 
         ind = get_indicators(symbol)
         if ind is None:
+            time.sleep(SLEEP)
+            continue
+
+        if is_stale(ind):
+            print(f"  STALE data for {symbol}: last bar {ind['last_date']} < {REF_DATE} — skipped")
             time.sleep(SLEEP)
             continue
 
@@ -588,7 +650,7 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
         if pending_full else section_header('Pending List: Empty')
     if pending_full:
         html += f'<table style="{table_style()}"><thead><tr>'
-        for col in ['Symbol', 'Industry', 'Price Rs', '9EMA', '30EMA', 'EMA200 Rs']:
+        for col in ['Symbol', 'Industry', 'Price Rs', '9EMA', '30EMA', 'EMA200 Rs', 'Status']:
             html += f'<th style="{th_style()}">{col}</th>'
         html += '</tr></thead><tbody>'
         for p in pending_full:
@@ -599,6 +661,7 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
                 <td style="{td_style('right')}">{p.get('EMA9', 'N/A')}</td>
                 <td style="{td_style('right')}">{p.get('EMA30', 'N/A')}</td>
                 <td style="{td_style('right')}">{p.get('EMA200', 'N/A')}</td>
+                <td style="{td_style()}">{p.get('Status', '')}</td>
             </tr>'''
         html += '</tbody></table>'
 
@@ -733,9 +796,13 @@ def main(args):
         exits, holds, warnings, positions, hit_log, miss_log = run_exit(positions, hit_log, miss_log)
         print(f"      {len(exits)} exit(s) | {len(holds)} holding | {len(warnings)} below-EMA200 warning(s)")
 
+        global REF_DATE
+        REF_DATE = fetch_ref_date()
+        print(f"      Reference session (NIFTY last bar): {REF_DATE}")
+
         # Pending review — promote or drop existing pending entries
         print("\n[3/6] Pending Review...")
-        pending, dropped, promoted, positions, entry_snapshots = run_pending_review(
+        pending, dropped, promoted, positions, entry_snapshots, pending_view = run_pending_review(
             pending, positions, entry_snapshots)
         print(f"      {len(promoted)} promoted | {len(dropped)} dropped | {len(pending)} still pending")
 
@@ -760,11 +827,15 @@ def main(args):
                     'Symbol': sym, 'Industry': row.get('Industry', ''),
                     'Price': np['Price'], 'EMA9': np['EMA9'],
                     'EMA30': np['EMA30'], 'EMA200': np['EMA200'],
+                    'Status': 'new today',
                 })
             else:
+                v = pending_view.get(sym, {})
                 pending_display.append({
                     'Symbol': sym, 'Industry': row.get('Industry', ''),
-                    'Price': 'N/A', 'EMA9': 'N/A', 'EMA30': 'N/A', 'EMA200': 'N/A',
+                    'Price': v.get('Price', 'N/A'), 'EMA9': v.get('EMA9', 'N/A'),
+                    'EMA30': v.get('EMA30', 'N/A'), 'EMA200': v.get('EMA200', 'N/A'),
+                    'Status': v.get('Status', ''),
                 })
 
         # Sync to GitHub
