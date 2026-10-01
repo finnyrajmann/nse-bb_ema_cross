@@ -7,7 +7,6 @@ PNBHOUSING,Mortgage Finance,True
 ADANIPOWER,Utilities - Independent Power Producers,False
 NAM-INDIA,Asset Management,True
 ADANIGREEN,Utilities - Renewable,False
-UNIONBANK,Banks - Regional,True
 CUB,Banks - Regional,True
 ANANDRATHI,Asset Management,True
 ATHERENERG,Auto Manufacturers,False
@@ -16,3 +15,5 @@ GAIL,Utilities - Regulated Gas,False
 HONASA,Household & Personal Products,False
 J&KBANK,Banks - Regional,True
 ZYDUSWELL,Packaged Foods,False
+IDEA,Telecom Services,False
+NYKAA,Internet Retail,False
