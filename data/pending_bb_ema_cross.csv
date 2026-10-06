@@ -11,7 +11,6 @@ CUB,Banks - Regional,True
 ANANDRATHI,Asset Management,True
 ATHERENERG,Auto Manufacturers,False
 ABB,Specialty Industrial Machinery,False
-GAIL,Utilities - Regulated Gas,False
 HONASA,Household & Personal Products,False
 J&KBANK,Banks - Regional,True
 IDEA,Telecom Services,False
@@ -21,3 +20,5 @@ MOTHERSON,Auto Parts,False
 RADICO,Beverages - Wineries & Distilleries,False
 CEMPRO,Engineering & Construction,False
 BOSCHLTD,Auto Parts,False
+PFOCUS,Entertainment,False
+SHYAMMETL,Steel,False
