@@ -1,5 +1,4 @@
 Symbol,Industry,IsBanking
-TITAN,Luxury Goods,False
 FEDERALBNK,Banks - Regional,True
 OFSS,Software - Infrastructure,False
 KARURVYSYA,Banks - Regional,True
@@ -22,3 +21,5 @@ CEMPRO,Engineering & Construction,False
 BOSCHLTD,Auto Parts,False
 PFOCUS,Entertainment,False
 SHYAMMETL,Steel,False
+ADANIENT,Thermal Coal,False
+MINDACORP,Auto Parts,False
