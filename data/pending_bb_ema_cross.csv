@@ -1,5 +1,4 @@
 Symbol,Industry,IsBanking
-FEDERALBNK,Banks - Regional,True
 OFSS,Software - Infrastructure,False
 KARURVYSYA,Banks - Regional,True
 PNBHOUSING,Mortgage Finance,True
@@ -10,7 +9,6 @@ ATHERENERG,Auto Manufacturers,False
 ABB,Specialty Industrial Machinery,False
 HONASA,Household & Personal Products,False
 J&KBANK,Banks - Regional,True
-IDEA,Telecom Services,False
 NYKAA,Internet Retail,False
 TVSMOTOR,Auto Manufacturers,False
 MOTHERSON,Auto Parts,False
@@ -30,3 +28,6 @@ APARINDS,Electrical Equipment & Parts,False
 SYRMA,Electronic Components,False
 FINCABLES,Electrical Equipment & Parts,False
 KIRLOSENG,Specialty Industrial Machinery,False
+HSCL,Specialty Chemicals,False
+ENGINERSIN,Engineering & Construction,False
+CARBORUNIV,Conglomerates,False
