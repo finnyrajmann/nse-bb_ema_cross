@@ -17,11 +17,18 @@ Design summary (locked, Sep 2026):
        currently above EMA200 -> added to the pending list.
     2. Every day, each pending stock is re-checked:
        - If price falls below EMA200 -> dropped from pending (no entry).
-       - Elif 9 EMA has crossed above 30 EMA -> PROMOTED: a real paper
-         position opens here, at today's price.
+       - Elif a 9/30 EMA cross-up happened on ANY bar after the stock's
+         AddedDate (the bar on which it touched BB-lower) -> PROMOTED: a
+         paper position opens at that CROSS bar's close. If the run is
+         late (stale data, missed run) the entry is backdated to the cross
+         bar and the exit rules are replayed bar-by-bar up to the latest
+         bar, so a position that should already have exited goes straight
+         to the hit/miss log.
        - Otherwise -> stays pending, indefinitely (no fixed timeout).
   This guarantees a real entry always coincides with 9EMA > 30EMA, so the
-  EMA9/30 cross-down stop can never fire immediately after entry.
+  EMA9/30 cross-down stop can never fire immediately after entry. Because
+  the cross is searched across all bars since AddedDate (not just the last
+  two), a skipped or late run can no longer lose a cross.
 - Target exit: price touches/exceeds BB-upper (20, 2 std).
 - Stop exit: EITHER 9 EMA currently below 30 EMA, OR price <= 10% below
   the highest daily HIGH since entry (trailing stop). Same-day-both case
@@ -39,10 +46,20 @@ Design summary (locked, Sep 2026):
   watchlist_bb_ema_cross.csv, pending_bb_ema_cross.csv,
   positions_bb_ema_cross.csv, trade_log_hit_bb_ema_cross.csv,
   trade_log_miss_bb_ema_cross.csv, entry_snapshot_bb_ema_cross.csv
-- pending_bb_ema_cross.csv uses the same schema as the watchlist file
-  (Symbol, Industry, IsBanking) — no extra fields, since removal/promotion
-  logic is condition-based, not time-based, so no stored touch-date is
-  needed.
+- pending_bb_ema_cross.csv = watchlist schema + AddedDate (Symbol, Industry,
+  IsBanking, AddedDate). AddedDate is the date of the BAR that touched
+  BB-lower. Removal/promotion is still condition-based (no timeout); the
+  date only anchors the cross search. Legacy rows with no AddedDate are
+  reconstructed once by simulating the rules from SYSTEM_START_DATE.
+- Trading calendar: data/nse_holidays.csv (Date,Type,Description; Type is
+  HOLIDAY or COVERS_THROUGH). A day is a session if it is Mon-Fri and not
+  a listed holiday. The run skips non-session days. "Stale" = a stock's
+  newest bar is older than the last COMPLETED session per this calendar
+  (NIFTY's newest bar is only a cross-check). Stale pending stocks are
+  still evaluated on the data available; stale watchlist stocks are
+  skipped for new touches and listed in the email.
+- Invoke with {"dry_run": true} to do everything except write to GitHub;
+  the email is prefixed [DRY RUN]. {"force": true} runs on a non-session day.
 """
 
 import os
@@ -52,7 +69,7 @@ import time
 import base64
 import math
 from io import StringIO
-from datetime import datetime
+from datetime import datetime, date, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
@@ -71,6 +88,11 @@ TRAIL_STOP_PCT   = 10.0
 POSITION_SIZE    = 10000
 SLEEP            = 0.5
 HIT_THRESHOLD_PCT = 3.0   # PnL% strictly greater than this -> hit, else -> miss
+
+IST                = timezone(timedelta(hours=5, minutes=30))
+BAR_FINAL_HOUR_IST = 16      # today's daily bar counts as complete only after this hour (IST)
+HOLIDAY_PATH       = 'data/nse_holidays.csv'
+SYSTEM_START_DATE  = date(2026, 9, 18)   # first BB_EMA_CROSS run; legacy pending rows are rebuilt from here
 
 DATA_PERIOD      = "1y"   # sufficient for 9/30 EMA, BB(20), and EMA200
                            # (EMA200 here is informational/gate use only —
@@ -156,17 +178,85 @@ def calc_bb(closes, period=BB_PERIOD, std_mult=BB_STD):
     }
 
 
-REF_DATE = None   # latest trading date seen on the NIFTY index this run
+# ─────────────────────────────────────────────
+# TRADING CALENDAR (explicit holiday list — not inferred from Yahoo)
+# ─────────────────────────────────────────────
+HOLIDAYS         = set()
+CALENDAR_THROUGH = None    # date through which the holiday list is known complete
+CALENDAR_OK      = False
+REF_DATE         = None    # last COMPLETED session per the calendar (set in main)
+
+
+def load_calendar(content):
+    """Parse data/nse_holidays.csv (Date,Type,Description)."""
+    global HOLIDAYS, CALENDAR_THROUGH, CALENDAR_OK
+    HOLIDAYS, CALENDAR_THROUGH = set(), None
+    for r in parse_csv(content):
+        t = (r.get('Type') or '').strip().upper()
+        d = parse_date(r.get('Date'))
+        if d is None:
+            continue
+        if t == 'HOLIDAY':
+            HOLIDAYS.add(d)
+        elif t == 'COVERS_THROUGH':
+            CALENDAR_THROUGH = d
+    CALENDAR_OK = True
+
+
+def parse_date(v):
+    try:
+        return datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return None
+
+
+def is_trading_day(d):
+    return d.weekday() < 5 and d not in HOLIDAYS
+
+
+def prev_trading_day(d):
+    d -= timedelta(days=1)
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return d
+
+
+def next_trading_day(d):
+    d += timedelta(days=1)
+    while not is_trading_day(d):
+        d += timedelta(days=1)
+    return d
+
+
+def last_completed_session(now_ist):
+    """Most recent session whose daily bar should be final at now_ist."""
+    d = now_ist.date()
+    if is_trading_day(d) and now_ist.hour >= BAR_FINAL_HOUR_IST:
+        return d
+    return prev_trading_day(d)
+
+
+def calendar_notices(today):
+    notes = []
+    if not CALENDAR_OK:
+        notes.append(f"Holiday calendar ({HOLIDAY_PATH}) could not be loaded — only weekends are "
+                     f"treated as non-trading days.")
+    elif CALENDAR_THROUGH is None or today > CALENDAR_THROUGH:
+        notes.append(f"Holiday calendar is only confirmed through {CALENDAR_THROUGH} — update "
+                     f"{HOLIDAY_PATH} and its COVERS_THROUGH row.")
+    elif (CALENDAR_THROUGH - today).days < 14:
+        notes.append(f"Holiday calendar ends {CALENDAR_THROUGH} — add the next holidays soon.")
+    return notes
 
 
 def fetch_ref_date():
-    """Latest bar date on ^NSEI = the session every stock should be on."""
+    """Newest bar date on ^NSEI — used only as a cross-check of the calendar."""
     bars = fetch_price_bars('^NSEI', '5d')
     return bars[-1]['date'] if bars else None
 
 
 def is_stale(ind):
-    """True if this symbol's newest bar is older than the index's newest bar."""
+    """True if this symbol's newest bar is older than the last completed session."""
     return bool(REF_DATE and ind.get('last_date') and ind['last_date'] < REF_DATE)
 
 
@@ -203,6 +293,7 @@ def get_indicators(symbol, period=DATA_PERIOD):
         'ema9_prev':  ema9_prev,
         'ema30_prev': ema30_prev,
         'bars':     bars,
+        'ser':      build_series(bars),
     }
 
 
@@ -212,6 +303,143 @@ def high_since(bars, entry_dt):
     if not relevant:
         return bars[-1]['high'] if bars else None
     return max(relevant)
+
+
+# ─────────────────────────────────────────────
+# BAR-BY-BAR ENGINE (series + rule simulation)
+# ─────────────────────────────────────────────
+def ema_series(values, period):
+    """EMA at every index (None until `period` values exist). Matches calc_ema()."""
+    out = [None] * len(values)
+    if len(values) < period:
+        return out
+    k = 2 / (period + 1)
+    ema = sum(values[:period]) / period
+    out[period - 1] = round(ema, 2)
+    for i in range(period, len(values)):
+        ema = values[i] * k + ema * (1 - k)
+        out[i] = round(ema, 2)
+    return out
+
+
+def build_series(bars):
+    """Per-bar indicator series for a list of bars (oldest -> newest)."""
+    closes = [b['close'] for b in bars]
+    bb = []
+    for i in range(len(closes)):
+        if i + 1 >= BB_PERIOD + 2:
+            bb.append(calc_bb(closes[i + 1 - (BB_PERIOD + 2): i + 1]))
+        else:
+            bb.append(None)
+    return {
+        'bars':   bars,
+        'closes': closes,
+        'ema9':   ema_series(closes, EMA_FAST),
+        'ema30':  ema_series(closes, EMA_SLOW),
+        'ema200': ema_series(closes, EMA_LONG),
+        'bb':     bb,
+    }
+
+
+def _above_ema200(ser, i):
+    e = ser['ema200'][i]
+    return e is not None and ser['closes'][i] > e
+
+
+def _touch(ser, i):
+    """BB-lower touch while above EMA200 (the pending-entry condition)."""
+    bb = ser['bb'][i]
+    return bb is not None and _above_ema200(ser, i) and ser['closes'][i] <= bb['bb_lower']
+
+
+def _cross_up(ser, i):
+    """True 9/30 cross-up on bar i: 9<=30 on the previous bar, 9>30 now."""
+    if i < 1:
+        return False
+    a, b = ser['ema9'][i - 1], ser['ema30'][i - 1]
+    c, d = ser['ema9'][i], ser['ema30'][i]
+    return None not in (a, b, c, d) and a <= b and c > d
+
+
+def replay_exit(ser, entry_i):
+    """
+    Replay the exit rules on every bar after the entry bar (same rules and
+    precedence as run_exit). Returns None if the position is still open on
+    the latest bar, else a dict describing the first exit.
+    The trailing high counts bars from the first session AFTER the entry bar
+    (EntryDate = next trading day), exactly like high_since() in live runs.
+    """
+    bars = ser['bars']
+    hi = None
+    for j in range(entry_i + 1, len(bars)):
+        hi = bars[j]['high'] if hi is None else max(hi, bars[j]['high'])
+        price = ser['closes'][j]
+        bb = ser['bb'][j]
+        e9, e30 = ser['ema9'][j], ser['ema30'][j]
+        trail_price = round(hi * (1 - TRAIL_STOP_PCT / 100), 2)
+        target     = bb is not None and price >= bb['bb_upper']
+        ema_stop   = e9 is not None and e30 is not None and e9 < e30
+        trail_stop = price <= trail_price
+        if target:
+            return {'idx': j, 'type': 'TARGET',
+                    'reason': f"Price at/above BB Upper ({bb['bb_upper']})"}
+        if ema_stop and trail_stop:
+            return {'idx': j, 'type': 'STOP_BOTH',
+                    'reason': (f"9EMA<30EMA ({e9}<{e30}) AND trailing stop hit "
+                               f"({trail_price}, high since entry {hi})")}
+        if ema_stop:
+            return {'idx': j, 'type': 'STOP_EMA',
+                    'reason': f"9EMA crossed below 30EMA ({e9} < {e30})"}
+        if trail_stop:
+            return {'idx': j, 'type': 'STOP_TRAIL',
+                    'reason': f"Trailing stop hit ({trail_price}, high since entry {hi})"}
+    return None
+
+
+def simulate(ser, state, added_date=None, from_date=None, rescan=False):
+    """
+    Walk the bars applying the entry rules.
+      state='PENDING' + added_date : continue a known pending episode; only
+                                     bars strictly AFTER added_date count.
+      state='NONE' + from_date     : look for touches on bars >= from_date.
+      rescan=True                  : keep going after a drop / exit (used to
+                                     rebuild legacy rows with no AddedDate).
+    Returns (events, final_state, added_date) where events is a list of
+      {'type': 'ADD'|'DROP'|'ENTER', 'idx': bar index, 'exit': exit dict|None}
+    and final_state is 'PENDING', 'POSITION' or 'NONE'.
+    """
+    bars = ser['bars']
+    events = []
+    i = 0
+    n = len(bars)
+    while i < n:
+        d = bars[i]['date']
+        if state == 'PENDING':
+            if added_date is not None and d <= added_date:
+                i += 1
+                continue
+            if not _above_ema200(ser, i):
+                events.append({'type': 'DROP', 'idx': i, 'exit': None})
+                state, added_date = 'NONE', None
+                if not rescan:
+                    break
+            elif _cross_up(ser, i):
+                x = replay_exit(ser, i)
+                events.append({'type': 'ENTER', 'idx': i, 'exit': x})
+                if x is None:
+                    return events, 'POSITION', None
+                state, added_date = 'NONE', None
+                if not rescan:
+                    break
+                i = x['idx']          # resume on the exit bar (exits run before the scan)
+                continue
+        else:  # NONE
+            if from_date is None or d >= from_date:
+                if _touch(ser, i):
+                    state, added_date = 'PENDING', d
+                    events.append({'type': 'ADD', 'idx': i, 'exit': None})
+        i += 1
+    return events, state, added_date
 
 
 # ─────────────────────────────────────────────
@@ -322,13 +550,15 @@ def run_exit(positions, hit_log, miss_log):
         pnl_pct = round((price - entry_price) / entry_price * 100, 2)
 
         if exit_type:
+            exit_date_d = next_trading_day(ind['last_date'])
+            days_held   = (exit_date_d - entry_date.date()).days
             record = {
                 'Symbol':     symbol,
                 'EntryDate':  pos['EntryDate'],
                 'EntryPrice': entry_price,
                 'Quantity':   quantity,
                 'Capital':    capital,
-                'ExitDate':   datetime.now().strftime('%Y-%m-%d'),
+                'ExitDate':   exit_date_d.strftime('%Y-%m-%d'),
                 'ExitPrice':  price,
                 'PnL':        pnl,
                 'PnL%':       pnl_pct,
@@ -370,23 +600,55 @@ def run_exit(positions, hit_log, miss_log):
 # ─────────────────────────────────────────────
 # PENDING LIST REVIEW (existing pending entries)
 # ─────────────────────────────────────────────
-def run_pending_review(pending, positions, entry_snapshots):
+def _closed_record(symbol, entry_date, entry_price, qty, exit_date, exit_price, exit_reason):
+    pnl     = round((exit_price - entry_price) * qty, 2)
+    pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2)
+    return {
+        'Symbol':     symbol,
+        'EntryDate':  entry_date.strftime('%Y-%m-%d'),
+        'EntryPrice': entry_price,
+        'Quantity':   qty,
+        'Capital':    round(entry_price * qty, 2),
+        'ExitDate':   exit_date.strftime('%Y-%m-%d'),
+        'ExitPrice':  exit_price,
+        'PnL':        pnl,
+        'PnL%':       pnl_pct,
+        'DaysHeld':   (exit_date - entry_date).days,
+        'ExitReason': exit_reason,
+        'TrackType':  'Paper',
+    }
+
+
+def run_pending_review(pending, positions, entry_snapshots, hit_log, miss_log):
     """
-    Re-check every symbol already in the pending list:
-      - price < EMA200            -> dropped (no entry)
-      - 9EMA crosses above 30EMA (prev bar 9<=30, now 9>30)
-                                  -> PROMOTED (real position opens)
-      - otherwise                 -> stays pending
+    Re-check every symbol already in the pending list against ALL bars since
+    its AddedDate (the bar that touched BB-lower):
+      - close <= EMA200 on a bar        -> dropped (no entry)
+      - 9/30 EMA cross-up on a bar      -> PROMOTED at that bar's close
+        (backdated if the cross is not the latest bar; exits are replayed
+        up to the latest bar, so a position may land straight in the logs)
+      - otherwise                       -> stays pending
+    Rows with no AddedDate (legacy) are rebuilt once by simulating the rules
+    from SYSTEM_START_DATE (or the stock's last logged exit).
     Returns (still_pending, dropped, promoted, positions, entry_snapshots,
-             view) where view maps Symbol -> display values for every stock
-    that remains pending.
+             view, late_exits, hit_log, miss_log, reconciled)
     """
     view            = {}
     still_pending   = []
     dropped         = []
     promoted        = []
+    late_exits      = []
+    reconciled      = []
     positions       = list(positions)
     entry_snapshots = list(entry_snapshots)
+    hit_log         = list(hit_log)
+    miss_log        = list(miss_log)
+
+    last_exit = {}
+    for r in hit_log + miss_log:
+        d = parse_date(r.get('ExitDate'))
+        if d and (r['Symbol'] not in last_exit or d > last_exit[r['Symbol']]):
+            last_exit[r['Symbol']] = d
 
     for row in pending:
         symbol = row['Symbol'].strip()
@@ -399,82 +661,114 @@ def run_pending_review(pending, positions, entry_snapshots):
             time.sleep(SLEEP)
             continue
 
+        ser   = ind['ser']
+        bars  = ser['bars']
+        last  = len(bars) - 1
+        stale = is_stale(ind)
+        stale_note = f" [data as of {ind['last_date']}]" if stale else ''
+        if stale:
+            print(f"  STALE data for {symbol}: last bar {ind['last_date']} < {REF_DATE} "
+                  f"— evaluating on the data available")
+
         view[symbol] = {'Price': ind['price'], 'EMA9': ind['ema9'],
                         'EMA30': ind['ema30'], 'EMA200': ind['ema200'],
                         'Status': ''}
 
-        if is_stale(ind):
-            # Data is older than the latest session — do not promote or drop.
-            still_pending.append(row)
-            view[symbol]['Status'] = f"STALE (as of {ind['last_date']})"
-            print(f"  STALE data for {symbol}: last bar {ind['last_date']} < {REF_DATE}")
-            time.sleep(SLEEP)
-            continue
+        added  = parse_date(row.get('AddedDate'))
+        legacy = added is None
+        if legacy:
+            start = max(SYSTEM_START_DATE, last_exit.get(symbol, SYSTEM_START_DATE))
+            events, state, added = simulate(ser, 'NONE', from_date=start, rescan=True)
+            if not events:
+                # Nothing found since the start: keep it pending but only let
+                # FUTURE crosses count (the old behaviour) and flag it.
+                state = 'PENDING'
+                added = bars[-2]['date'] if len(bars) >= 2 else bars[-1]['date']
+                reconciled.append({'Symbol': symbol, 'AddedDate': added,
+                                   'Note': 'no BB-lower touch found since system start — '
+                                           'only future crosses will count'})
+            elif state == 'PENDING':
+                reconciled.append({'Symbol': symbol, 'AddedDate': added,
+                                   'Note': 'AddedDate inferred from price history'})
+        else:
+            events, state, added = simulate(ser, 'PENDING', added_date=added)
 
-        if ind['ema200'] is None or ind['price'] <= ind['ema200']:
-            view.pop(symbol, None)
-            dropped.append({
-                'Symbol': symbol,
-                'Price':  ind['price'],
-                'EMA200': ind['ema200'],
-            })
-            time.sleep(SLEEP)
-            continue
-
-        # True cross-up: 9EMA was at/below 30EMA on the previous bar and is
-        # above it now. A stock whose 9EMA is already above 30EMA stays
-        # pending until it dips below and crosses back up.
-        crossed_up = (
-            ind['ema9'] is not None and ind['ema30'] is not None
-            and ind['ema9_prev'] is not None and ind['ema30_prev'] is not None
-            and ind['ema9_prev'] <= ind['ema30_prev']
-            and ind['ema9'] > ind['ema30']
-        )
-
-        if crossed_up:
-            quantity   = max(1, int(POSITION_SIZE / ind['price']))
-            entry_date = datetime.now().strftime('%Y-%m-%d')
-
-            positions.append({
-                'Symbol':     symbol,
-                'EntryDate':  entry_date,
-                'EntryPrice': ind['price'],
-                'Quantity':   quantity,
-                'TrackType':  'Paper',
-            })
+        for ev in events:
+            if ev['type'] != 'ENTER':
+                continue
+            i        = ev['idx']
+            px       = round(ser['closes'][i], 2)
+            qty      = max(1, int(POSITION_SIZE / px))
+            entry_dt = next_trading_day(bars[i]['date'])
+            x        = ev['exit']
+            outcome  = 'open'
+            if x is None:
+                positions.append({
+                    'Symbol':     symbol,
+                    'EntryDate':  entry_dt.strftime('%Y-%m-%d'),
+                    'EntryPrice': px,
+                    'Quantity':   qty,
+                    'TrackType':  'Paper',
+                })
+            else:
+                xj  = x['idx']
+                rec = _closed_record(symbol, entry_dt, px, qty,
+                                     next_trading_day(bars[xj]['date']),
+                                     round(ser['closes'][xj], 2),
+                                     x['reason'] + ' [backdated replay]')
+                late_exits.append(rec)
+                (hit_log if rec['PnL%'] > HIT_THRESHOLD_PCT else miss_log).append(rec)
+                outcome = f"already exited {rec['ExitDate']} ({x['type']}, {rec['PnL%']:+.2f}%)"
+            bb = ser['bb'][i]
             entry_snapshots.append({
                 'Symbol':    symbol,
-                'EntryDate': entry_date,
-                'Price':     ind['price'],
-                'EMA9':      ind['ema9'],
-                'EMA30':     ind['ema30'],
-                'EMA200':    ind['ema200'],
-                'BBUpper':   ind['bb_upper'],
+                'EntryDate': entry_dt.strftime('%Y-%m-%d'),
+                'Price':     px,
+                'EMA9':      ser['ema9'][i],
+                'EMA30':     ser['ema30'][i],
+                'EMA200':    ser['ema200'][i],
+                'BBUpper':   bb['bb_upper'] if bb else '',
             })
             promoted.append({
-                'Symbol':   symbol,
-                'Industry': row.get('Industry', ''),
-                'Price':    ind['price'],
-                'EMA9':     ind['ema9'],
-                'EMA30':    ind['ema30'],
-                'BB Upper': ind['bb_upper'],
+                'Symbol':    symbol,
+                'Industry':  row.get('Industry', ''),
+                'Price':     px,
+                'EMA9':      ser['ema9'][i],
+                'EMA30':     ser['ema30'][i],
+                'BB Upper':  bb['bb_upper'] if bb else '',
+                'EntryDate': entry_dt.strftime('%Y-%m-%d'),
+                'Backdated': i != last,
+                'Outcome':   outcome,
             })
-            print(f"  Promoted: {symbol} @ Rs.{ind['price']} "
-                  f"(9EMA crossed above 30EMA: {ind['ema9_prev']}<={ind['ema30_prev']} -> {ind['ema9']}>{ind['ema30']})")
-        else:
-            still_pending.append(row)
+            print(f"  Promoted: {symbol} @ Rs.{px} on cross bar {bars[i]['date']} "
+                  f"(entry {entry_dt}){' — BACKDATED' if i != last else ''} — {outcome}")
+
+        if state == 'PENDING':
+            new_row = dict(row)
+            new_row['AddedDate'] = added.strftime('%Y-%m-%d')
+            still_pending.append(new_row)
             if ind['ema9'] is not None and ind['ema30'] is not None:
-                view[symbol]['Status'] = ('9>30, needs dip then cross'
-                                          if ind['ema9'] > ind['ema30']
-                                          else '9<30, awaiting cross')
+                base = ('9>30, needs dip then cross' if ind['ema9'] > ind['ema30']
+                        else '9<30, awaiting cross')
+            else:
+                base = ''
+            view[symbol]['Status'] = base + stale_note
+        else:
+            view.pop(symbol, None)
+            # report a drop only if it was the last thing that happened
+            if state == 'NONE' and events and events[-1]['type'] == 'DROP':
+                j = events[-1]['idx']
+                dropped.append({
+                    'Symbol': symbol,
+                    'Price':  round(ser['closes'][j], 2),
+                    'EMA200': ser['ema200'][j],
+                    'Bar':    bars[j]['date'],
+                })
 
         time.sleep(SLEEP)
 
-    # promoted stocks leave pending, so they have no pending view
-    for pr in promoted:
-        view.pop(pr['Symbol'], None)
-
-    return still_pending, dropped, promoted, positions, entry_snapshots, view
+    return (still_pending, dropped, promoted, positions, entry_snapshots, view,
+            late_exits, hit_log, miss_log, reconciled)
 
 
 # ─────────────────────────────────────────────
@@ -484,11 +778,14 @@ def run_watchlist_scan(watchlist, positions, pending):
     """
     Scan the full watchlist for fresh BB-lower touches. A symbol already in
     positions or already pending is skipped. Adds new touches to pending.
-    Returns (new_pending_entries, updated_pending)
+    Returns (new_pending_entries, updated_pending, stale_skipped)
+    A touch is only detectable on a stock's newest bar, so stocks whose data
+    is stale are skipped and reported (their touches today could be missed).
     """
     open_symbols   = {p['Symbol'] for p in positions}
     pending_symbols = {p['Symbol'] for p in pending}
     new_pending    = []
+    stale_skipped  = []
     pending        = list(pending)
 
     for row in watchlist:
@@ -503,6 +800,7 @@ def run_watchlist_scan(watchlist, positions, pending):
 
         if is_stale(ind):
             print(f"  STALE data for {symbol}: last bar {ind['last_date']} < {REF_DATE} — skipped")
+            stale_skipped.append(f"{symbol} (as of {ind['last_date']})")
             time.sleep(SLEEP)
             continue
 
@@ -518,6 +816,7 @@ def run_watchlist_scan(watchlist, positions, pending):
                 'Symbol':    symbol,
                 'Industry':  row.get('Industry', ''),
                 'IsBanking': row.get('IsBanking', ''),
+                'AddedDate': ind['last_date'].strftime('%Y-%m-%d'),
             }
             pending.append(pending_row)
             pending_symbols.add(symbol)
@@ -534,20 +833,35 @@ def run_watchlist_scan(watchlist, positions, pending):
 
         time.sleep(SLEEP)
 
-    return new_pending, pending
+    return new_pending, pending, stale_skipped
 
 
 # ─────────────────────────────────────────────
 # EMAIL
 # ─────────────────────────────────────────────
+def send_holiday_email(today, reason):
+    sender    = os.environ.get('GMAIL_SENDER')
+    password  = os.environ.get('GMAIL_APP_PASSWORD')
+    recipient = os.environ.get('GMAIL_RECIPIENT')
+    msg = MIMEMultipart()
+    msg['From']    = sender
+    msg['To']      = recipient
+    msg['Subject'] = f"NSE BB_EMA_CROSS — {today.strftime('%d %b %Y')} | market holiday — no run"
+    msg.attach(MIMEText(f"<p>{reason}. No positions, pending list or logs were touched.</p>", 'html'))
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        server.login(sender, password)
+        server.sendmail(sender, recipient, msg.as_string())
+
+
 def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
-               warnings, alltime_pnl, alltime_count, hit_count, miss_count):
+               warnings, alltime_pnl, alltime_count, hit_count, miss_count,
+               notices=None, stale_skipped=None, reconciled=None, dry_run=False):
     sender    = os.environ.get('GMAIL_SENDER')
     password  = os.environ.get('GMAIL_APP_PASSWORD')
     recipient = os.environ.get('GMAIL_RECIPIENT')
     repo_name = os.environ.get('GITHUB_REPO')
     today     = datetime.now().strftime('%d %b %Y')
-    subject   = (f"NSE BB_EMA_CROSS — {today} | {len(promoted)} promoted | "
+    subject   = (f"{'[DRY RUN] ' if dry_run else ''}NSE BB_EMA_CROSS — {today} | {len(promoted)} promoted | "
                  f"{len(pending_full)} pending | {len(holds)} open")
 
     def table_style():
@@ -571,6 +885,22 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
         NSE BB_EMA_CROSS — {today}
     </h2>
     '''
+
+    # NOTICES (calendar / data-quality / reconciliation)
+    notices       = notices or []
+    stale_skipped = stale_skipped or []
+    reconciled    = reconciled or []
+    if notices or stale_skipped or reconciled:
+        html += section_header('Notices')
+        html += '<ul style="font-family:Arial,sans-serif;font-size:13px;">'
+        for n in notices:
+            html += f'<li>{n}</li>'
+        if stale_skipped:
+            html += (f'<li>{len(stale_skipped)} watchlist stock(s) had stale data and were skipped '
+                     f'for new BB-lower touches today: {", ".join(stale_skipped)}</li>')
+        for r in reconciled:
+            html += f'<li>Reconciled {r["Symbol"]}: AddedDate {r["AddedDate"]} — {r["Note"]}</li>'
+        html += '</ul>'
 
     # EXITS
     html += section_header(
@@ -616,17 +946,19 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
     if promoted:
         html += section_header(f'Promoted to Positions Today ({len(promoted)})')
         html += f'<table style="{table_style()}"><thead><tr>'
-        for col in ['Symbol', 'Industry', 'Price Rs', '9EMA', '30EMA', 'BB Upper Rs']:
+        for col in ['Symbol', 'Industry', 'Entry Date', 'Entry Rs', '9EMA', '30EMA', 'BB Upper Rs', 'Note']:
             html += f'<th style="{th_style()}">{col}</th>'
         html += '</tr></thead><tbody>'
         for e in promoted:
             html += f'''<tr>
                 <td style="{td_style()}"><b>{e['Symbol']}</b></td>
                 <td style="{td_style()}">{e['Industry']}</td>
+                <td style="{td_style()}">{e['EntryDate']}</td>
                 <td style="{td_style('right')}">Rs.{e['Price']}</td>
                 <td style="{td_style('right')}">{e['EMA9']}</td>
                 <td style="{td_style('right')}">{e['EMA30']}</td>
                 <td style="{td_style('right')}">Rs.{e['BB Upper']}</td>
+                <td style="{td_style()}">{'BACKDATED to cross bar; ' if e.get('Backdated') else ''}{e.get('Outcome', '')}</td>
             </tr>'''
         html += '</tbody></table>'
 
@@ -634,12 +966,13 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
     if dropped:
         html += section_header(f'Dropped from Pending Today ({len(dropped)}) — price fell below EMA200')
         html += f'<table style="{table_style()}"><thead><tr>'
-        for col in ['Symbol', 'Price Rs', 'EMA200 Rs']:
+        for col in ['Symbol', 'Bar', 'Price Rs', 'EMA200 Rs']:
             html += f'<th style="{th_style()}">{col}</th>'
         html += '</tr></thead><tbody>'
         for d in dropped:
             html += f'''<tr>
                 <td style="{td_style()}"><b>{d['Symbol']}</b></td>
+                <td style="{td_style()}">{d.get('Bar', '')}</td>
                 <td style="{td_style('right')}">Rs.{d['Price']}</td>
                 <td style="{td_style('right')}">Rs.{d['EMA200']}</td>
             </tr>'''
@@ -758,8 +1091,12 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
 # MAIN
 # ─────────────────────────────────────────────
 def main(args):
+    args    = args or {}
+    dry_run = bool(args.get('dry_run'))
+    force   = bool(args.get('force'))
+
     print("\n" + "="*50)
-    print("  NSE BB_EMA_CROSS — DO Functions Run")
+    print("  NSE BB_EMA_CROSS — DO Functions Run" + ("  [DRY RUN]" if dry_run else ""))
     print("="*50)
 
     pat       = os.environ.get('GITHUB_PAT')
@@ -773,6 +1110,34 @@ def main(args):
     snap_path     = f'data/entry_snapshot_{SYSTEM_CODE}.csv'
 
     try:
+        global REF_DATE
+
+        # Trading calendar (explicit holiday list)
+        now_ist = datetime.now(IST)
+        today   = now_ist.date()
+        try:
+            cal_content, _ = github_get(repo_name, HOLIDAY_PATH, pat)
+            load_calendar(cal_content)
+            print(f"      Calendar: {len(HOLIDAYS)} holidays, confirmed through {CALENDAR_THROUGH}")
+        except Exception as e:
+            print(f"      WARNING: could not load {HOLIDAY_PATH}: {e}")
+        notices = calendar_notices(today)
+
+        if not is_trading_day(today) and not force:
+            reason = ('Weekend' if today.weekday() >= 5 else 'NSE trading holiday') + f" ({today})"
+            print(f"  {reason} — nothing to do.")
+            if today.weekday() < 5 and not dry_run:
+                send_holiday_email(today, reason)
+            return {"statusCode": 200, "body": f"{reason}: skipped"}
+
+        REF_DATE = last_completed_session(now_ist)
+        nifty_date = fetch_ref_date()
+        print(f"      Last completed session (calendar): {REF_DATE} | NIFTY newest bar: {nifty_date}")
+        if nifty_date and nifty_date != REF_DATE:
+            notices.append(f"Calendar expects the last session to be {REF_DATE} but NIFTY's newest "
+                           f"bar is {nifty_date} — either Yahoo is lagging/ahead or the holiday "
+                           f"list is wrong.")
+
         # Load data from GitHub
         print("\n[1/6] Loading data from GitHub...")
         pos_content, pos_sha       = github_get(repo_name, pos_path, pat)
@@ -796,28 +1161,23 @@ def main(args):
         exits, holds, warnings, positions, hit_log, miss_log = run_exit(positions, hit_log, miss_log)
         print(f"      {len(exits)} exit(s) | {len(holds)} holding | {len(warnings)} below-EMA200 warning(s)")
 
-        global REF_DATE
-        REF_DATE = fetch_ref_date()
-        print(f"      Reference session (NIFTY last bar): {REF_DATE}")
-
-        # Pending review — promote or drop existing pending entries
+        # Pending review — promote (possibly backdated) or drop existing pending entries
         print("\n[3/6] Pending Review...")
-        pending, dropped, promoted, positions, entry_snapshots, pending_view = run_pending_review(
-            pending, positions, entry_snapshots)
-        print(f"      {len(promoted)} promoted | {len(dropped)} dropped | {len(pending)} still pending")
+        (pending, dropped, promoted, positions, entry_snapshots, pending_view,
+         late_exits, hit_log, miss_log, reconciled) = run_pending_review(
+            pending, positions, entry_snapshots, hit_log, miss_log)
+        exits = exits + late_exits
+        print(f"      {len(promoted)} promoted ({len(late_exits)} already exited) | "
+              f"{len(dropped)} dropped | {len(pending)} still pending | "
+              f"{len(reconciled)} legacy row(s) reconciled")
 
         # Watchlist scan — new BB-lower touches
         print("\n[4/6] Watchlist Scan (new BB-lower touches)...")
-        new_pending, pending = run_watchlist_scan(watchlist, positions, pending)
-        print(f"      {len(new_pending)} new pending signal(s)")
+        new_pending, pending, stale_skipped = run_watchlist_scan(watchlist, positions, pending)
+        print(f"      {len(new_pending)} new pending signal(s) | {len(stale_skipped)} stale stock(s) skipped")
 
-        # Build a live-refreshed view of the full pending list for the email
-        # (re-fetch is already done in run_pending_review/scan for the ones
-        # touched this run; for a lightweight display, just show what's on
-        # file — Symbol/Industry always available, indicator columns filled
-        # in only for rows freshly touched/reviewed this run).
+        # Display rows for the full pending list in the email
         pending_display = []
-        promoted_symbols_today = {p['Symbol'] for p in promoted}
         new_pending_lookup = {p['Symbol']: p for p in new_pending}
         for row in pending:
             sym = row['Symbol']
@@ -839,26 +1199,27 @@ def main(args):
                 })
 
         # Sync to GitHub
-        print("\n[5/6] Syncing to GitHub...")
-        commit_msg = f"Auto-update — {datetime.now().strftime('%Y-%m-%d')}"
+        print("\n[5/6] Syncing to GitHub..." + (" (SKIPPED — dry run)" if dry_run else ""))
+        commit_msg = f"Auto-update — {today.strftime('%Y-%m-%d')}"
 
         pos_fields     = ['Symbol', 'EntryDate', 'EntryPrice', 'Quantity', 'TrackType']
         log_fields     = ['Symbol', 'EntryDate', 'EntryPrice', 'Quantity', 'Capital',
                            'ExitDate', 'ExitPrice', 'PnL', 'PnL%', 'DaysHeld',
                            'ExitReason', 'TrackType']
-        pending_fields = ['Symbol', 'Industry', 'IsBanking']
+        pending_fields = ['Symbol', 'Industry', 'IsBanking', 'AddedDate']
         snap_fields    = ['Symbol', 'EntryDate', 'Price', 'EMA9', 'EMA30', 'EMA200', 'BBUpper']
 
-        github_put(repo_name, pos_path, pat,
-                   to_csv(positions, pos_fields), pos_sha, commit_msg)
-        github_put(repo_name, hit_log_path, pat,
-                   to_csv(hit_log, log_fields), hit_sha, commit_msg)
-        github_put(repo_name, miss_log_path, pat,
-                   to_csv(miss_log, log_fields), miss_sha, commit_msg)
-        github_put(repo_name, pending_path, pat,
-                   to_csv(pending, pending_fields), pend_sha, commit_msg)
-        github_put(repo_name, snap_path, pat,
-                   to_csv(entry_snapshots, snap_fields), snap_sha, commit_msg)
+        if not dry_run:
+            github_put(repo_name, pos_path, pat,
+                       to_csv(positions, pos_fields), pos_sha, commit_msg)
+            github_put(repo_name, hit_log_path, pat,
+                       to_csv(hit_log, log_fields), hit_sha, commit_msg)
+            github_put(repo_name, miss_log_path, pat,
+                       to_csv(miss_log, log_fields), miss_sha, commit_msg)
+            github_put(repo_name, pending_path, pat,
+                       to_csv(pending, pending_fields), pend_sha, commit_msg)
+            github_put(repo_name, snap_path, pat,
+                       to_csv(entry_snapshots, snap_fields), snap_sha, commit_msg)
 
         # Cumulative trade-log P&L
         alltime_pnl = (sum(float(r['PnL']) for r in hit_log) +
@@ -868,10 +1229,12 @@ def main(args):
         # Send email
         print("\n[6/6] Sending email...")
         send_email(exits, new_pending, promoted, dropped, pending_display, holds,
-                   warnings, alltime_pnl, alltime_count, len(hit_log), len(miss_log))
+                   warnings, alltime_pnl, alltime_count, len(hit_log), len(miss_log),
+                   notices=notices, stale_skipped=stale_skipped,
+                   reconciled=reconciled, dry_run=dry_run)
 
         print("\n  Done.\n")
-        return {"statusCode": 200, "body": "Pipeline complete"}
+        return {"statusCode": 200, "body": "Pipeline complete" + (" (dry run)" if dry_run else "")}
 
     except Exception as e:
         import traceback
