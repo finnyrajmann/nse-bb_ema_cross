@@ -1,33 +1,30 @@
-Symbol,Industry,IsBanking
-OFSS,Software - Infrastructure,False
-KARURVYSYA,Banks - Regional,True
-PNBHOUSING,Mortgage Finance,True
-NAM-INDIA,Asset Management,True
-ADANIGREEN,Utilities - Renewable,False
-ANANDRATHI,Asset Management,True
-ATHERENERG,Auto Manufacturers,False
-ABB,Specialty Industrial Machinery,False
-HONASA,Household & Personal Products,False
-J&KBANK,Banks - Regional,True
-NYKAA,Internet Retail,False
-TVSMOTOR,Auto Manufacturers,False
-MOTHERSON,Auto Parts,False
-RADICO,Beverages - Wineries & Distilleries,False
-CEMPRO,Engineering & Construction,False
-BOSCHLTD,Auto Parts,False
-SHYAMMETL,Steel,False
-MINDACORP,Auto Parts,False
-ACUTAAS,Specialty Chemicals,False
-ELGIEQUIP,Specialty Industrial Machinery,False
-SIEMENS,Specialty Industrial Machinery,False
-RBLBANK,Banks - Regional,True
-GRAPHITE,Electrical Equipment & Parts,False
-POWERINDIA,Electrical Equipment & Parts,False
-CGPOWER,Electrical Equipment & Parts,False
-APARINDS,Electrical Equipment & Parts,False
-SYRMA,Electronic Components,False
-FINCABLES,Electrical Equipment & Parts,False
-KIRLOSENG,Specialty Industrial Machinery,False
-HSCL,Specialty Chemicals,False
-ENGINERSIN,Engineering & Construction,False
-CARBORUNIV,Conglomerates,False
+Symbol,Industry,IsBanking,AddedDate
+OFSS,Software - Infrastructure,False,2026-09-21
+ADANIGREEN,Utilities - Renewable,False,2026-10-19
+ATHERENERG,Auto Manufacturers,False,2026-09-29
+ABB,Specialty Industrial Machinery,False,2026-09-29
+HONASA,Household & Personal Products,False,2026-09-29
+J&KBANK,Banks - Regional,True,2026-09-28
+TVSMOTOR,Auto Manufacturers,False,2026-10-01
+MOTHERSON,Auto Parts,False,2026-10-01
+CEMPRO,Engineering & Construction,False,2026-10-01
+BOSCHLTD,Auto Parts,False,2026-09-29
+SHYAMMETL,Steel,False,2026-10-05
+ACUTAAS,Specialty Chemicals,False,2026-10-08
+RBLBANK,Banks - Regional,True,2026-10-13
+GRAPHITE,Electrical Equipment & Parts,False,2026-10-15
+CGPOWER,Electrical Equipment & Parts,False,2026-10-15
+APARINDS,Electrical Equipment & Parts,False,2026-10-15
+SYRMA,Electronic Components,False,2026-10-16
+FINCABLES,Electrical Equipment & Parts,False,2026-10-16
+KIRLOSENG,Specialty Industrial Machinery,False,2026-10-16
+ENGINERSIN,Engineering & Construction,False,2026-10-19
+CARBORUNIV,Conglomerates,False,2026-10-19
+MCX,Financial Data & Stock Exchanges,False,2026-10-21
+REDINGTON,Information Technology Services,False,2026-10-21
+SONACOMS,Auto Parts,False,2026-10-21
+WELSPUNLIV,Textile Manufacturing,False,2026-10-21
+NAVINFLUOR,Chemicals,False,2026-10-21
+JSWINFRA,Marine Shipping,False,2026-10-21
+BELRISE,Auto Parts,False,2026-10-21
+KPIL,Engineering & Construction,False,2026-10-21
