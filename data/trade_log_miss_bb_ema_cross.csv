@@ -1,1 +1,5 @@
 Symbol,EntryDate,EntryPrice,Quantity,Capital,ExitDate,ExitPrice,PnL,PnL%,DaysHeld,ExitReason,TrackType
+KARURVYSYA,2026-10-13,342.3,29,9926.7,2026-10-15,341.25,-30.45,-0.31,2,"Trailing stop hit (345.66, high since entry 356.3500061035156) [backdated replay]",Paper
+PNBHOUSING,2026-10-13,1200.0,8,9600.0,2026-10-16,1183.9,-128.8,-1.34,3,"Trailing stop hit (1188.06, high since entry 1224.800048828125) [backdated replay]",Paper
+NYKAA,2026-10-08,341.25,29,9896.25,2026-10-09,332.3,-259.55,-2.62,1,"Trailing stop hit (333.78, high since entry 344.1000061035156) [backdated replay]",Paper
+RADICO,2026-10-13,4555.0,2,9110.0,2026-10-16,4449.0,-212.0,-2.33,3,"Trailing stop hit (4474.61, high since entry 4613.0) [backdated replay]",Paper
