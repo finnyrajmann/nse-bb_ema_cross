@@ -29,10 +29,11 @@ Design summary (locked, Sep 2026):
   EMA9/30 cross-down stop can never fire immediately after entry. Because
   the cross is searched across all bars since AddedDate (not just the last
   two), a skipped or late run can no longer lose a cross.
-- Target exit: price touches/exceeds BB-upper (20, 2 std).
-- Stop exit: EITHER 9 EMA currently below 30 EMA, OR price <= 10% below
-  the highest daily HIGH since entry (trailing stop). Same-day-both case
-  logged as a distinct STOP_BOTH exit reason.
+- Exit (changed 21 Oct 2026): ONLY a 3% trailing stop — exit when the close
+  is <= 3% below the highest daily HIGH since entry (TRAIL_STOP_PCT).
+  The old BB-upper target and the 9EMA<30EMA stop are switched off via
+  USE_BB_TARGET / USE_EMA_STOP (set True to restore them; the 9/30 stop
+  would then also produce STOP_EMA / STOP_BOTH exits).
 - Below-EMA200 warning: an open position whose price falls below EMA200
   while 9EMA is still above 30EMA is NOT force-exited — only flagged in
   the email. (Unlike pending entries, which DO get hard-dropped on this
@@ -84,7 +85,9 @@ BB_STD           = 2
 EMA_FAST         = 9
 EMA_SLOW         = 30
 EMA_LONG         = 200
-TRAIL_STOP_PCT   = 10.0
+TRAIL_STOP_PCT   = 3.0     # exit when close <= this % below the highest HIGH since entry
+USE_BB_TARGET    = False   # exit at BB-upper (disabled: trailing stop only)
+USE_EMA_STOP     = False   # exit when 9EMA < 30EMA (disabled: trailing stop only)
 POSITION_SIZE    = 10000
 SLEEP            = 0.5
 HIT_THRESHOLD_PCT = 3.0   # PnL% strictly greater than this -> hit, else -> miss
@@ -92,7 +95,7 @@ HIT_THRESHOLD_PCT = 3.0   # PnL% strictly greater than this -> hit, else -> miss
 IST                = timezone(timedelta(hours=5, minutes=30))
 BAR_FINAL_HOUR_IST = 16      # today's daily bar counts as complete only after this hour (IST)
 HOLIDAY_PATH       = 'data/nse_holidays.csv'
-SYSTEM_START_DATE  = date(2026, 9, 18)   # first BB_EMA_CROSS run; legacy pending rows are rebuilt from here
+SYSTEM_START_DATE  = date(2026, 9, 17)   # first bar the system ever scanned (first run was 18 Sep); legacy pending rows are rebuilt from here
 
 DATA_PERIOD      = "1y"   # sufficient for 9/30 EMA, BB(20), and EMA200
                            # (EMA200 here is informational/gate use only —
@@ -377,8 +380,8 @@ def replay_exit(ser, entry_i):
         bb = ser['bb'][j]
         e9, e30 = ser['ema9'][j], ser['ema30'][j]
         trail_price = round(hi * (1 - TRAIL_STOP_PCT / 100), 2)
-        target     = bb is not None and price >= bb['bb_upper']
-        ema_stop   = e9 is not None and e30 is not None and e9 < e30
+        target     = USE_BB_TARGET and bb is not None and price >= bb['bb_upper']
+        ema_stop   = USE_EMA_STOP and e9 is not None and e30 is not None and e9 < e30
         trail_stop = price <= trail_price
         if target:
             return {'idx': j, 'type': 'TARGET',
@@ -511,7 +514,7 @@ def run_exit(positions, hit_log, miss_log):
         entry_date  = datetime.strptime(pos['EntryDate'], '%Y-%m-%d')
         track_type  = pos['TrackType']
         capital     = round(entry_price * quantity, 2)
-        days_held   = (datetime.now() - entry_date).days
+        days_held   = max(0, (datetime.now() - entry_date).days)
 
         ind = get_indicators(symbol)
         if ind is None:
@@ -523,10 +526,16 @@ def run_exit(positions, hit_log, miss_log):
         hi_since = high_since(ind['bars'], entry_date.date())
         trail_stop_price = round(hi_since * (1 - TRAIL_STOP_PCT / 100), 2) if hi_since else None
 
-        target_hit = price >= ind['bb_upper']
-        ema_stop   = (ind['ema9'] is not None and ind['ema30'] is not None
+        target_hit = USE_BB_TARGET and price >= ind['bb_upper']
+        ema_stop   = (USE_EMA_STOP and ind['ema9'] is not None and ind['ema30'] is not None
                       and ind['ema9'] < ind['ema30'])
         trail_stop = trail_stop_price is not None and price <= trail_stop_price
+
+        # A position's first session is EntryDate. If the newest bar is older than
+        # that (a re-run with no new session, e.g. after a holiday), there is
+        # nothing to evaluate yet — hold, don't exit on the entry bar itself.
+        if ind['last_date'] < entry_date.date():
+            target_hit = ema_stop = trail_stop = False
 
         exit_type   = None
         exit_reason = None
