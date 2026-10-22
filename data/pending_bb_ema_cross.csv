@@ -2,7 +2,6 @@ Symbol,Industry,IsBanking,AddedDate
 OFSS,Software - Infrastructure,False,2026-09-21
 ADANIGREEN,Utilities - Renewable,False,2026-10-19
 ATHERENERG,Auto Manufacturers,False,2026-09-29
-ABB,Specialty Industrial Machinery,False,2026-09-29
 HONASA,Household & Personal Products,False,2026-09-29
 J&KBANK,Banks - Regional,True,2026-09-28
 TVSMOTOR,Auto Manufacturers,False,2026-10-01
@@ -28,3 +27,9 @@ NAVINFLUOR,Chemicals,False,2026-10-21
 JSWINFRA,Marine Shipping,False,2026-10-21
 BELRISE,Auto Parts,False,2026-10-21
 KPIL,Engineering & Construction,False,2026-10-21
+IIFL,Credit Services,True,2026-10-22
+RRKABEL,Electrical Equipment & Parts,False,2026-10-22
+JINDALSAW,Steel,False,2026-10-22
+RADICO,Beverages - Wineries & Distilleries,False,2026-10-22
+ACMESOLAR,Utilities - Renewable,False,2026-10-22
+KAJARIACER,Building Products & Equipment,False,2026-10-22
