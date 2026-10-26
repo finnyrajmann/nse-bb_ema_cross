@@ -25,7 +25,6 @@ KPIL,Engineering & Construction,False,2026-10-21
 RRKABEL,Electrical Equipment & Parts,False,2026-10-22
 RADICO,Beverages - Wineries & Distilleries,False,2026-10-22
 ACMESOLAR,Utilities - Renewable,False,2026-10-22
-KAJARIACER,Building Products & Equipment,False,2026-10-22
 PAYTM,Software - Infrastructure,False,2026-10-23
 NETWEB,Computer Hardware,False,2026-10-23
 WELCORP,Steel,False,2026-10-23
@@ -36,4 +35,5 @@ ADANIPORTS,Marine Shipping,False,2026-10-23
 FLUOROCHEM,Specialty Chemicals,False,2026-10-23
 AEGISLOG,Oil & Gas Refining & Marketing,False,2026-10-23
 MOTILALOFS,Capital Markets,False,2026-10-23
-INDGN,Health Information Services,False,2026-10-23
+CGCL,Credit Services,True,2026-10-26
+BALRAMCHIN,Confectioners,False,2026-10-26
