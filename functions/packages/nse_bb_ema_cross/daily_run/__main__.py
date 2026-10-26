@@ -851,15 +851,15 @@ def run_watchlist_scan(watchlist, positions, pending):
 def send_holiday_email(today, reason):
     sender    = os.environ.get('GMAIL_SENDER')
     password  = os.environ.get('GMAIL_APP_PASSWORD')
-    recipient = os.environ.get('GMAIL_RECIPIENT')
+    recipients = [r.strip() for r in os.environ.get('GMAIL_RECIPIENT', '').split(',') if r.strip()]
     msg = MIMEMultipart()
     msg['From']    = sender
-    msg['To']      = recipient
+    msg['To']      = ', '.join(recipients)
     msg['Subject'] = f"NSE BB_EMA_CROSS — {today.strftime('%d %b %Y')} | market holiday — no run"
     msg.attach(MIMEText(f"<p>{reason}. No positions, pending list or logs were touched.</p>", 'html'))
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
         server.login(sender, password)
-        server.sendmail(sender, recipient, msg.as_string())
+        server.sendmail(sender, recipients, msg.as_string())
 
 
 def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
@@ -867,7 +867,7 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
                notices=None, stale_skipped=None, reconciled=None, dry_run=False):
     sender    = os.environ.get('GMAIL_SENDER')
     password  = os.environ.get('GMAIL_APP_PASSWORD')
-    recipient = os.environ.get('GMAIL_RECIPIENT')
+    recipients = [r.strip() for r in os.environ.get('GMAIL_RECIPIENT', '').split(',') if r.strip()]
     repo_name = os.environ.get('GITHUB_REPO')
     today     = datetime.now().strftime('%d %b %Y')
     subject   = (f"{'[DRY RUN] ' if dry_run else ''}NSE BB_EMA_CROSS — {today} | {len(promoted)} promoted | "
@@ -1086,14 +1086,14 @@ def send_email(exits, new_pending, promoted, dropped, pending_full, holds,
 
     msg = MIMEMultipart()
     msg['From']    = sender
-    msg['To']      = recipient
+    msg['To']      = ', '.join(recipients)
     msg['Subject'] = subject
     msg.attach(MIMEText(html, 'html'))
 
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
         server.login(sender, password)
-        server.sendmail(sender, recipient, msg.as_string())
-    print(f"  Email sent to {recipient}")
+        server.sendmail(sender, recipients, msg.as_string())
+    print(f"  Email sent to {', '.join(recipients)}")
 
 
 # ─────────────────────────────────────────────
