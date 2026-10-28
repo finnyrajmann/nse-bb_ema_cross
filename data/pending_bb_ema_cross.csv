@@ -1,7 +1,6 @@
 Symbol,Industry,IsBanking,AddedDate
 OFSS,Software - Infrastructure,False,2026-09-21
 HONASA,Household & Personal Products,False,2026-09-29
-TVSMOTOR,Auto Manufacturers,False,2026-10-01
 MOTHERSON,Auto Parts,False,2026-10-01
 CEMPRO,Engineering & Construction,False,2026-10-01
 BOSCHLTD,Auto Parts,False,2026-09-29
@@ -15,7 +14,6 @@ ENGINERSIN,Engineering & Construction,False,2026-10-19
 CARBORUNIV,Conglomerates,False,2026-10-19
 MCX,Financial Data & Stock Exchanges,False,2026-10-21
 REDINGTON,Information Technology Services,False,2026-10-21
-SONACOMS,Auto Parts,False,2026-10-21
 WELSPUNLIV,Textile Manufacturing,False,2026-10-21
 NAVINFLUOR,Chemicals,False,2026-10-21
 JSWINFRA,Marine Shipping,False,2026-10-21
