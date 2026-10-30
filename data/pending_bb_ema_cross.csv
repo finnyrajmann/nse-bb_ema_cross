@@ -2,9 +2,7 @@ Symbol,Industry,IsBanking,AddedDate
 OFSS,Software - Infrastructure,False,2026-09-21
 HONASA,Household & Personal Products,False,2026-09-29
 MOTHERSON,Auto Parts,False,2026-10-01
-CEMPRO,Engineering & Construction,False,2026-10-01
 SHYAMMETL,Steel,False,2026-10-05
-CGPOWER,Electrical Equipment & Parts,False,2026-10-15
 APARINDS,Electrical Equipment & Parts,False,2026-10-15
 SYRMA,Electronic Components,False,2026-10-16
 FINCABLES,Electrical Equipment & Parts,False,2026-10-16
@@ -13,7 +11,6 @@ ENGINERSIN,Engineering & Construction,False,2026-10-19
 CARBORUNIV,Conglomerates,False,2026-10-19
 MCX,Financial Data & Stock Exchanges,False,2026-10-21
 REDINGTON,Information Technology Services,False,2026-10-21
-WELSPUNLIV,Textile Manufacturing,False,2026-10-21
 NAVINFLUOR,Chemicals,False,2026-10-21
 JSWINFRA,Marine Shipping,False,2026-10-21
 KPIL,Engineering & Construction,False,2026-10-21
