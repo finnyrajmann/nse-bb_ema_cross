@@ -6,19 +6,15 @@ SHYAMMETL,Steel,False,2026-10-05
 APARINDS,Electrical Equipment & Parts,False,2026-10-15
 SYRMA,Electronic Components,False,2026-10-16
 FINCABLES,Electrical Equipment & Parts,False,2026-10-16
-KIRLOSENG,Specialty Industrial Machinery,False,2026-10-16
 ENGINERSIN,Engineering & Construction,False,2026-10-19
 CARBORUNIV,Conglomerates,False,2026-10-19
 MCX,Financial Data & Stock Exchanges,False,2026-10-21
 REDINGTON,Information Technology Services,False,2026-10-21
-NAVINFLUOR,Chemicals,False,2026-10-21
 JSWINFRA,Marine Shipping,False,2026-10-21
 KPIL,Engineering & Construction,False,2026-10-21
-RRKABEL,Electrical Equipment & Parts,False,2026-10-22
 RADICO,Beverages - Wineries & Distilleries,False,2026-10-22
 ACMESOLAR,Utilities - Renewable,False,2026-10-22
 PAYTM,Software - Infrastructure,False,2026-10-23
-NETWEB,Computer Hardware,False,2026-10-23
 WELCORP,Steel,False,2026-10-23
 SOLARINDS,Specialty Chemicals,False,2026-10-23
 BHEL,Specialty Industrial Machinery,False,2026-10-23
@@ -28,3 +24,4 @@ AEGISLOG,Oil & Gas Refining & Marketing,False,2026-10-23
 MOTILALOFS,Capital Markets,False,2026-10-23
 CGCL,Credit Services,True,2026-10-26
 BALRAMCHIN,Confectioners,False,2026-10-26
+HFCL,Communication Equipment,False,2026-11-02
