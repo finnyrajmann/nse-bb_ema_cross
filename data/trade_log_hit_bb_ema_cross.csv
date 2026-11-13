@@ -2,3 +2,4 @@ Symbol,EntryDate,EntryPrice,Quantity,Capital,ExitDate,ExitPrice,PnL,PnL%,DaysHel
 ATHERENERG,2026-10-28,1674.0,5,8370.0,2026-11-06,1778.6,523.0,6.25,9,"Trailing stop hit (1784.8, high since entry 1840.0)",Paper
 WELSPUNLIV,2026-11-02,219.08,45,9858.6,2026-11-06,253.33,1541.25,15.63,4,"Trailing stop hit (259.4, high since entry 267.4200134277344)",Paper
 BOSCHLTD,2026-10-30,47565.0,1,47565.0,2026-11-09,50700.0,3135.0,6.59,10,"Trailing stop hit (50900.75, high since entry 52475.0)",Paper
+TVSMOTOR,2026-10-29,4239.9,2,8479.8,2026-11-16,4495.0,510.2,6.02,18,"Trailing stop hit (4497.02, high since entry 4636.10009765625)",Paper
