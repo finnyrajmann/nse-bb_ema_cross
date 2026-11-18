@@ -118,7 +118,8 @@ Deployment account and schedule: TBD.
 
 ## Change log
 
-- Oct 2026: exit switched to a trailing stop only (BB target and 9/30 stop off).
-- Nov 2026: trailing stop changed from 10% under the highest daily high to 3%
-  under the highest candle body top. Trading-calendar gate, stale-data handling,
+- 21 Oct 2026: exit switched to a 3% trailing stop under the highest daily HIGH
+  since entry. BB-upper target and 9/30 stop switched off.
+- Nov 2026: trailing stop measured from the highest daily candle BODY TOP
+  instead of the highest HIGH. Trading-calendar gate, stale-data handling,
   dry-run and force options added.
