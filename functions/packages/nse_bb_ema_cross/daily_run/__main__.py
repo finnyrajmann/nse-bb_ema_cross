@@ -30,7 +30,8 @@ Design summary (locked, Sep 2026):
   the cross is searched across all bars since AddedDate (not just the last
   two), a skipped or late run can no longer lose a cross.
 - Exit (changed 21 Oct 2026): ONLY a 3% trailing stop — exit when the close
-  is <= 3% below the highest daily HIGH since entry (TRAIL_STOP_PCT).
+  is <= 3% below the highest daily candle BODY TOP since entry, where
+  body top = max(open, close) and wicks are ignored (TRAIL_STOP_PCT).
   The old BB-upper target and the 9EMA<30EMA stop are switched off via
   USE_BB_TARGET / USE_EMA_STOP (set True to restore them; the 9/30 stop
   would then also produce STOP_EMA / STOP_BOTH exits).
@@ -85,7 +86,7 @@ BB_STD           = 2
 EMA_FAST         = 9
 EMA_SLOW         = 30
 EMA_LONG         = 200
-TRAIL_STOP_PCT   = 3.0     # exit when close <= this % below the highest HIGH since entry
+TRAIL_STOP_PCT   = 3.0     # exit when close <= this % below the highest candle BODY TOP since entry
 USE_BB_TARGET    = False   # exit at BB-upper (disabled: trailing stop only)
 USE_EMA_STOP     = False   # exit when 9EMA < 30EMA (disabled: trailing stop only)
 POSITION_SIZE    = 10000
@@ -300,11 +301,16 @@ def get_indicators(symbol, period=DATA_PERIOD):
     }
 
 
-def high_since(bars, entry_dt):
-    """Highest daily HIGH from entry_dt (inclusive) to the most recent bar."""
-    relevant = [b['high'] for b in bars if b['date'] >= entry_dt]
+def body_top(bar):
+    """Top of the candle body: max(open, close). Wicks are ignored."""
+    return max(bar['open'], bar['close'])
+
+
+def body_high_since(bars, entry_dt):
+    """Highest candle BODY TOP from entry_dt (inclusive) to the most recent bar."""
+    relevant = [body_top(b) for b in bars if b['date'] >= entry_dt]
     if not relevant:
-        return bars[-1]['high'] if bars else None
+        return body_top(bars[-1]) if bars else None
     return max(relevant)
 
 
@@ -369,13 +375,14 @@ def replay_exit(ser, entry_i):
     Replay the exit rules on every bar after the entry bar (same rules and
     precedence as run_exit). Returns None if the position is still open on
     the latest bar, else a dict describing the first exit.
-    The trailing high counts bars from the first session AFTER the entry bar
-    (EntryDate = next trading day), exactly like high_since() in live runs.
+    The trailing body high counts bars from the first session AFTER the entry bar
+    (EntryDate = next trading day), exactly like body_high_since() in live runs.
     """
     bars = ser['bars']
     hi = None
     for j in range(entry_i + 1, len(bars)):
-        hi = bars[j]['high'] if hi is None else max(hi, bars[j]['high'])
+        bt = body_top(bars[j])
+        hi = bt if hi is None else max(hi, bt)
         price = ser['closes'][j]
         bb = ser['bb'][j]
         e9, e30 = ser['ema9'][j], ser['ema30'][j]
@@ -389,13 +396,13 @@ def replay_exit(ser, entry_i):
         if ema_stop and trail_stop:
             return {'idx': j, 'type': 'STOP_BOTH',
                     'reason': (f"9EMA<30EMA ({e9}<{e30}) AND trailing stop hit "
-                               f"({trail_price}, high since entry {hi})")}
+                               f"({trail_price}, body high since entry {hi})")}
         if ema_stop:
             return {'idx': j, 'type': 'STOP_EMA',
                     'reason': f"9EMA crossed below 30EMA ({e9} < {e30})"}
         if trail_stop:
             return {'idx': j, 'type': 'STOP_TRAIL',
-                    'reason': f"Trailing stop hit ({trail_price}, high since entry {hi})"}
+                    'reason': f"Trailing stop hit ({trail_price}, body high since entry {hi})"}
     return None
 
 
@@ -523,7 +530,7 @@ def run_exit(positions, hit_log, miss_log):
 
         price = ind['price']
 
-        hi_since = high_since(ind['bars'], entry_date.date())
+        hi_since = body_high_since(ind['bars'], entry_date.date())
         trail_stop_price = round(hi_since * (1 - TRAIL_STOP_PCT / 100), 2) if hi_since else None
 
         target_hit = USE_BB_TARGET and price >= ind['bb_upper']
@@ -547,13 +554,13 @@ def run_exit(positions, hit_log, miss_log):
             exit_type   = 'STOP_BOTH'
             exit_reason = (f"9EMA<30EMA ({ind['ema9']}<{ind['ema30']}) AND "
                             f"trailing stop hit ({trail_stop_price}, "
-                            f"high since entry {hi_since})")
+                            f"body high since entry {hi_since})")
         elif ema_stop:
             exit_type   = 'STOP_EMA'
             exit_reason = f"9EMA crossed below 30EMA ({ind['ema9']} < {ind['ema30']})"
         elif trail_stop:
             exit_type   = 'STOP_TRAIL'
-            exit_reason = f"Trailing stop hit ({trail_stop_price}, high since entry {hi_since})"
+            exit_reason = f"Trailing stop hit ({trail_stop_price}, body high since entry {hi_since})"
 
         pnl     = round((price - entry_price) * quantity, 2)
         pnl_pct = round((price - entry_price) / entry_price * 100, 2)
